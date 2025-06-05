@@ -9,6 +9,11 @@ import re
 import base64
 from io import BytesIO
 import requests
+import speech_recognition as sr
+from gtts import gTTS
+import tempfile
+from pydub import AudioSegment
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +296,82 @@ async def get_personality_response(prompt: str, system_prompt: str = None) -> st
     except Exception as e:
         logger.error(f"Ошибка при получении ответа от ChatGPT: {e}")
         return "Извините, произошла ошибка при обработке запроса."
+
+
+async def speech_to_text(audio_data: bytes) -> str:
+    """
+    Конвертирует голосовое сообщение в текст
+
+    Args:
+        audio_data (bytes): Голосовое сообщение в формате bytes
+
+    Returns:
+        str: Распознанный текст
+    """
+    try:
+        # Создаем временный файл для аудио
+        with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
+            temp_ogg.write(audio_data)
+            temp_ogg_path = temp_ogg.name
+
+        # Конвертируем OGG в WAV
+        audio = AudioSegment.from_ogg(temp_ogg_path)
+        wav_path = temp_ogg_path.replace('.ogg', '.wav')
+        audio.export(wav_path, format='wav')
+
+        # Инициализируем распознаватель речи
+        recognizer = sr.Recognizer()
+
+        # Распознаем речь
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data, language='ru-RU')
+
+        # Удаляем временные файлы
+        os.unlink(temp_ogg_path)
+        os.unlink(wav_path)
+
+        return text
+    except Exception as e:
+        logger.error(f"Ошибка при распознавании речи: {e}")
+        return None
+
+
+async def text_to_speech(text: str) -> bytes:
+    """
+    Конвертирует текст в голосовое сообщение
+
+    Args:
+        text (str): Текст для конвертации
+
+    Returns:
+        bytes: Голосовое сообщение в формате bytes
+    """
+    try:
+        # Создаем временный файл для аудио
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_mp3:
+            # Генерируем речь
+            tts = gTTS(text=text, lang='ru')
+            tts.save(temp_mp3.name)
+            temp_mp3_path = temp_mp3.name
+
+        # Конвертируем MP3 в OGG
+        audio = AudioSegment.from_mp3(temp_mp3_path)
+        ogg_path = temp_mp3_path.replace('.mp3', '.ogg')
+        audio.export(ogg_path, format='ogg')
+
+        # Читаем OGG файл
+        with open(ogg_path, 'rb') as f:
+            ogg_data = f.read()
+
+        # Удаляем временные файлы
+        os.unlink(temp_mp3_path)
+        os.unlink(ogg_path)
+
+        return ogg_data
+    except Exception as e:
+        logger.error(f"Ошибка при генерации речи: {e}")
+        return None
 
 
 

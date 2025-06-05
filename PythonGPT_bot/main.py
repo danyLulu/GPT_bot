@@ -7,6 +7,7 @@ from util import (
     send_photo, send_text, load_message, show_main_menu
 )
 from gpt_service.gpt import gpt, gpt_dialog
+from gpt_service.gpt_class import speech_to_text, text_to_speech
 from osnov_servis.random_facts import get_random_fact
 from osnov_servis.talk import talk, talk_dialog, load_character_prompt
 from osnov_servis.shared import dialog, chatgpt
@@ -232,6 +233,7 @@ async def gpt_command(update, context):
             InlineKeyboardButton("📚 Образование", callback_data="gpt_topic_education"),
             InlineKeyboardButton("💼 Бизнес", callback_data="gpt_topic_business")
         ],
+        [InlineKeyboardButton("🎤 Голосовой режим", callback_data="gpt_voice_mode")],
         [InlineKeyboardButton("🏠 Вернуться в меню", callback_data="gpt_main_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -400,7 +402,29 @@ async def handle_gpt_callback(update, context):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "gpt_main_menu":
+    if query.data == "gpt_voice_mode":
+        try:
+            # Отправляем сообщение с инструкциями
+            await query.message.reply_text(
+                "🎤 <b>Голосовой режим активирован!</b>\n\n"
+                "Теперь вы можете:\n"
+                "1. Отправлять голосовые сообщения\n"
+                "2. Получать голосовые ответы\n"
+                "3. Видеть текст распознанной речи\n\n"
+                "💡 <i>Просто отправьте голосовое сообщение, и я отвечу вам голосом</i>",
+                parse_mode='HTML'
+            )
+            return CHATTING
+        except Exception as e:
+            logger.error(f"Ошибка при активации голосового режима: {e}")
+            await query.message.reply_text(
+                "😔 <b>Произошла ошибка при активации голосового режима</b>\n"
+                "Пожалуйста, попробуйте еще раз",
+                parse_mode='HTML'
+            )
+            return CHATTING
+
+    elif query.data == "gpt_main_menu":
         try:
             # Очищаем историю сообщений GPT
             chatgpt.message_list.clear()
@@ -510,6 +534,68 @@ async def handle_gpt_callback(update, context):
     return CHATTING
 
 
+async def handle_voice_message(update, context):
+    """Обработчик голосовых сообщений"""
+    try:
+        # Отправляем индикатор набора текста
+        status_message = await update.message.reply_text(
+            "🎤 <i>Обрабатываю голосовое сообщение...</i>",
+            parse_mode='HTML'
+        )
+
+        # Получаем голосовое сообщение
+        voice = await update.message.voice.get_file()
+
+        # Скачиваем голосовое сообщение
+        voice_file = await voice.download_as_bytearray()
+
+        # Конвертируем голос в текст
+        text = await speech_to_text(voice_file)
+
+        if not text:
+            await status_message.edit_text(
+                "😔 <b>Не удалось распознать голосовое сообщение</b>\n"
+                "Пожалуйста, попробуйте еще раз или используйте текстовый ввод.",
+                parse_mode='HTML'
+            )
+            return CHATTING
+
+        # Получаем ответ от GPT
+        response = await gpt(text)
+
+        # Конвертируем ответ в голос
+        voice_response = await text_to_speech(response)
+
+        if not voice_response:
+            # Если не удалось сгенерировать голос, отправляем только текст
+            await status_message.delete()
+            await update.message.reply_text(
+                f"🤖 <b>Ответ GPT:</b>\n\n{response}",
+                parse_mode='HTML'
+            )
+            return CHATTING
+
+        # Удаляем сообщение о статусе
+        await status_message.delete()
+
+        # Отправляем голосовой ответ
+        await update.message.reply_voice(
+            voice=voice_response,
+            caption=f"🤖 <b>Ответ GPT:</b>\n\n{response}",
+            parse_mode='HTML'
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке голосового сообщения: {e}")
+        await update.message.reply_text(
+            "😔 <b>Произошла ошибка при обработке голосового сообщения</b>\n"
+            "Пожалуйста, попробуйте еще раз или используйте текстовый ввод.",
+            parse_mode='HTML'
+        )
+
+    return CHATTING
+
+
 # Создаем обработчики для GPT
 gpt_handler = ConversationHandler(
     entry_points=[
@@ -519,6 +605,7 @@ gpt_handler = ConversationHandler(
     states={
         CHATTING: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_gpt_message),
+            MessageHandler(filters.VOICE, handle_voice_message),
             CallbackQueryHandler(gpt_topic_selected, pattern=r'^gpt_topic_'),
             CallbackQueryHandler(handle_gpt_callback, pattern=r'^gpt_')
         ]
