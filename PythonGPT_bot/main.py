@@ -22,6 +22,7 @@ from osnov_servis.business_ideas import (
 
 import httpx
 import logging
+import html
 
 from telegram import InputMediaPhoto
 
@@ -329,6 +330,11 @@ async def gpt_topic_selected(update, context):
         return CHATTING
 
 
+def escape_html(text):
+    """Экранирует HTML-теги в тексте"""
+    return html.escape(text)
+
+
 async def handle_gpt_message(update, context):
     """Обработчик сообщений для GPT"""
     try:
@@ -338,8 +344,19 @@ async def handle_gpt_message(update, context):
             parse_mode='HTML'
         )
 
+        # Проверяем, есть ли фото в сообщении
+        image_url = None
+        if update.message.photo:
+            # Получаем URL самого большого фото
+            photo = update.message.photo[-1]
+            file = await context.bot.get_file(photo.file_id)
+            image_url = file.file_path
+
+        # Получаем текст сообщения
+        text = update.message.text or update.message.caption or "Проанализируй это изображение"
+
         # Получаем ответ от GPT
-        response = await gpt(update.message.text)
+        response = await gpt(text, image_url)
 
         # Создаем клавиатуру с кнопками
         keyboard = [
@@ -540,22 +557,30 @@ application.add_handler(CallbackQueryHandler(fact_button, pattern="^(new_fact|ne
 
 
 # Добавляем обработчик ошибок
-def error_handler(update, context):
+async def error_handler(update, context):
     """Обработчик ошибок"""
     logger.error(f"Произошла ошибка: {context.error}")
     if update and update.effective_message:
-        update.effective_message.reply_text(
-            "😔 Произошла ошибка при обработке запроса.\n"
-            "Пожалуйста, попробуйте еще раз или вернитесь в меню.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 Вернуться в меню", callback_data="main_menu")
-            ]])
-        )
+        try:
+            await update.effective_message.reply_text(
+                "😔 Произошла ошибка при обработке запроса.\n"
+                "Пожалуйста, попробуйте еще раз или вернитесь в меню.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Вернуться в меню", callback_data="main_menu")
+                ]])
+            )
+        except Exception as e:
+            logger.error(f"Ошибка в обработчике ошибок: {e}")
 
 
 application.add_error_handler(error_handler)
 
 # Запускаем бота
 if __name__ == '__main__':
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Добавляем параметры для предотвращения конфликтов
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
